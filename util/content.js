@@ -9,7 +9,7 @@
  *
  * In most cases, this is the metadata, media names, comments, etc for one map.
  * This object is what's stored in the 'queue' file we poll when it's time to
- * post a new map, and it should generally match the schema stored in the
+ * post a new map, and it should broadly match the schema stored in the
  * archive database. (In theory, this can be also support text-only blog
  * posts. A Content object should contain *at least one* of:
  * mapInfo+media OR comments.)
@@ -27,14 +27,15 @@
 class Content {
   /**
    *
-   * @param {object} mapInfo an object with
-   * title/author/sourceURL info for this map, all strings
+   * @param {object} mapInfo an object with title/author/url info for this map, all strings
+   * (constraint: either all of these are null or none of them are)
    * @param {string[]} media an array of pathnames to media files (jpg, mp4)
    * @param {boolean} flashing true if the media for this map contains flashing
    * and the post[s] should contain some kind of warning
    * @param {string[]} tags an array of string tags (not all platforms can use
    * this)
-   * @param {string} comments any additional comments; end a paragraph with '\n'
+   * @param {string[]} comments any additional comments; each array element is
+   * a paragraph
    * (handling this is gonna be really really fun I bet)
    */
   constructor(
@@ -42,7 +43,7 @@ class Content {
     media = [],
     flashing = false,
     tags = [],
-    comments = null
+    comments = []
   ) {
     this.mapInfo = mapInfo;
     this.media = media;
