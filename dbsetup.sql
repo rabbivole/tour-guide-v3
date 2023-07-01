@@ -19,7 +19,9 @@ CREATE TABLE
 IF NOT EXISTS Tags
 (
   tag_id INTEGER PRIMARY KEY,
-  tag_text TEXT
+  tag_text TEXT,
+  UNIQUE
+(tag_text)
 );
 
 CREATE TABLE
@@ -85,10 +87,9 @@ VALUES
     "gm_butts.bsp",
     "some guy",
     "http://steamcommunity.com/some/steamworkshop/link",
-    TRUE,
+    FALSE,
     DATETIME("now")
 );
-
 INSERT INTO Media
   (content_id, media_name)
 VALUES
@@ -97,20 +98,16 @@ VALUES
   (1, "dummy3.jpg"),
   (1, "dummy4.jpg"),
   (1, "dummy5.jpg");
-
-
 INSERT INTO Tags
   (tag_text)
 VALUES
   ("these are"),
   ("some tags");
-
 INSERT INTO ContentTags
   (content_id, tag_id)
 VALUES
   (1, 1),
   (1, 2);
-
 INSERT INTO Comments
   (content_id, ordering, comment)
 VALUES
@@ -126,16 +123,62 @@ VALUES
     "gallows.bsp",
     "a mystery",
     "http://steamcommunity.com/some/steamworkshop/link",
-    FALSE,
+    TRUE,
     DATETIME("now")
 );
-
 INSERT INTO Media
   (content_id, media_name)
 VALUES
   (2, "video.mp4");
-
 INSERT INTO Comments
   (content_id, ordering, comment)
 VALUES
   (2, 1, "some more placeholder content");
+
+
+INSERT INTO Content
+  (title, author, source_url, flashing, date_posted)
+VALUES
+  (
+    "de_placeholder.bsp",
+    "some other guy",
+    "http://steamcommunity.com/some/steamworkshop/link",
+    FALSE,
+    DATETIME("now")
+);
+INSERT INTO Media
+  (content_id, media_name)
+VALUES
+  (3, "dummy6.jpg"),
+  (3, "dummy7.jpg");
+INSERT OR
+IGNORE INTO Tags
+  (tag_text)
+VALUES
+  ("should be added"),
+  ("some tags");
+INSERT INTO ContentTags
+  (content_id, tag_id)
+VALUES
+  (3, 2),
+  (3, 3);
+
+INSERT INTO Content
+  (title, author, source_url, flashing, date_posted)
+VALUES
+  (
+    "cs_placeholder.bsp",
+    "yet another guy",
+    "http://steamcommunity.com/some/steamworkshop/link",
+    FALSE,
+    DATETIME("now")
+);
+INSERT INTO Media
+  (content_id, media_name)
+VALUES
+  (4, "dummy8.jpg"),
+  (4, "dummy9.jpg");
+INSERT INTO Comments
+  (content_id, ordering, comment)
+VALUES
+  (4, 1, "hopefully 4 posts is enough to test pagination");

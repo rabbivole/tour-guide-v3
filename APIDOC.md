@@ -12,38 +12,45 @@ tourguide is a system for posting and archiving screenshots of custom video game
 - `/posts?limit={num}`
 - `/posts?before_id={num}`
 
-Get content posts from the archive. `query` will search all text fields. Posts will be returned in descending content id order, which *may or may not correspond to chronological posting order*. Regardless, the aim is to try to serve recent posts first. (If this were critical, we'd implement this by paginating/ordering on the date_posted - I'm not super concerned with this, so I'm implementing a simpler option.)
+Get content posts from the archive. `query` will search all text fields. Posts will be returned in descending content id order, which *should, but might not correspond to chronological posting order*. Regardless, the aim is to try to serve recent posts first. (If this were critical, we'd implement this by paginating/ordering on the date_posted - I'm not super concerned with this, so I'm implementing a simpler option.)
 
 By default, a response to `/posts` will be limited to 20 posts. Pagination is recommended for reasonable response times.
+
+The `query` param is currently not yet supported.
 
 **Example Request:** `/posts?query=gm_butts`
 
 **Example Response:** `[json]`
 ```json
-[
-  {
-    content_id: 5,
-    map_info: {
-      title: "gm_butts.bsp",
-      author: "some guy; possibly a development company",
-      source_url: "https://steamcommunity.com/some/steam/workshop/link"
-    },
-    date_posted: "2023-06-28 00:55:08",
-    flashing: false,
-    tags: ["these are", "some tags"],
-    comments: [
-      "not all posts have comments; this may be an empty list.",
-      "each array element is considered as its own paragraph in contexts where paragraph breaks are applicable. if none are desired, this can be a one-element list.",
-      "in theory, text-only posts (or at least, ones that aren't primarily for the purpose of featuring a map) can exist if content exists in comments, but map_info is omitted or its fields are null.",
-      ],
-    media: ["a_series_of.jpg", "filenames.mp4", "or_empty_list.jpg"]
-  }
-]
+{
+  next: null,
+  results: [
+    {
+      content_id: 5,
+      contents: {
+        map_info: {
+          title: "gm_butts.bsp",
+          author: "some guy; possibly a development company",
+          source_url: "https://steamcommunity.com/some/steam/workshop/link"
+        },
+        date_posted: "2023-06-28 00:55:08",
+        flashing: false,
+        tags: ["these are", "some tags"],
+        comments: [
+          "not all posts have comments; this may be an empty list.",
+          "each array element is considered as its own paragraph in contexts where paragraph breaks are applicable. if none are desired, this can be a one-element list.",
+          "in theory, text-only posts (or at least, ones that aren't primarily for the purpose of featuring a map) can exist if content exists in comments, but map_info is omitted or its fields are null.",
+        ],
+        media: ["a_series_of.jpg", "filenames.mp4", "or_empty_list.jpg"]
+      }
+    }
+  ]
+}
 ```
 
 **Error Handling:**
 - A query that returns 0 results is not an error, merely an empty list.
-- If `?id=x` does not request an existing content id, returns `404 [text] | No content with that ID exists.`
+- `id`, `limit`, and `before_id` are all optional parameters. If any of these is present but is <1, returns `400 [text]` with the constraints.
 
 ## <span style="color:blue">**POST**</span> Log in to access administrative endpoints
 
