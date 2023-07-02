@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!--
+  Name: Jason Langley
+  Date: 7-1-23
+
+  A stub HTML file.
+-->
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>TITLE</title>
+  <link rel="stylesheet" href="temp.css">
+  <script src="temp.js"></script>
+</head>
+
+<body>
+  <article>
+    <h1>create an account</h1>
+    <form>
+      <div>
+        <label for="user">username: </label>
+        <input name="user" id="user" type="text" required>
+      </div>
+      <div>
+        <label for="pass">password: </label>
+        <input name="pass" id="pass" type="password" required>
+      </div>
+      <div>
+        <!-- the input boxes for password not being aligned is going to drive me INSANE but i don't
+        know if i want to expend the effort fixing it -->
+        <label for="pass">password (confirm): </label>
+        <input name="pass-again" id="pass-again" type="password" required>
+      </div>
+
+      <button id="create-submit">create</button>
+    </form>
+  </article>
+</body>
+
+</html>

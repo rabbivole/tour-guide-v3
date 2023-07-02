@@ -74,6 +74,29 @@ app.get("/posts", async (req, res) => {
   }
 });
 
+app.post("/create", async (req, res) => {
+  let db;
+  if (req.body.user && req.body.pass) {
+    try {
+      db = await getDBConnection();
+      await createAccount(db, req.body.user, req.body.pass);
+      close(db);
+      res.type("text").send("it possibly worked?");
+    } catch (err) {
+      console.error(err);
+      close(db);
+      res.type("text").status(400).send("boooo! we hate your hole!");
+    }
+  }
+})
+
+async function createAccount(db, user, pass) {
+  const hash = await bcrypt.hash(pass, 8);
+  const insert = "INSERT INTO Users(username, pass) VALUES (?, ?)";
+  const result = await db.run(insert, [user, hash]);
+  return result;
+}
+
 /**
  * Checks the request parameters for validity. For a parameter to be valid, it should either be
  * null/undefined (/posts params are all optional) or a reasonable value.
