@@ -6,6 +6,7 @@ const sqlite = require("sqlite");
 const bcrypt = require("bcryptjs");
 const uuid = require("uuid");
 const cookieParser = require("cookie-parser");
+const fs = require("fs");
 
 const tumblrHandler = require("./util/tumblr-handler.js");
 // canned sql
@@ -16,6 +17,7 @@ const Content = require("./util/content.js");
 // the platforms we should post to. most likely, this will be "tumblr" and possibly "cohost"
 const POST_TO = ["tumblr"];
 const DEFAULT_LIMIT = 20;
+const LOGFILE = "tourguide.log";
 
 const COOKIE_EXPIRY = 1000 * 60 * 60 * 8; // 8 hours, in ms
 const DEFAULT_PORT = 7999;
@@ -70,31 +72,46 @@ app.get("/posts", async (req, res) => {
     await close(db);
     console.error(err);
     res.type("text").status(500).send("A server error has occurred. Please try again later.");
-    //logError();
+    logError("Error attempting to get posts. /posts query params, err: ",
+      [req.query.id, req.query.before_id, req.query.limit, err]);
   }
 });
 
-app.post("/create", async (req, res) => {
+app.post("/auth", async (req, res) => {
   let db;
   if (req.body.user && req.body.pass) {
     try {
       db = await getDBConnection();
-      await createAccount(db, req.body.user, req.body.pass);
-      close(db);
-      res.type("text").send("it possibly worked?");
-    } catch (err) {
-      console.error(err);
-      close(db);
-      res.type("text").status(400).send("boooo! we hate your hole!");
-    }
-  }
-})
+      const valid = await authUser(db, req.body.user, req.body.pass);
+      await close(db);
 
-async function createAccount(db, user, pass) {
-  const hash = await bcrypt.hash(pass, 8);
-  const insert = "INSERT INTO Users(username, pass) VALUES (?, ?)";
-  const result = await db.run(insert, [user, hash]);
-  return result;
+      if (valid) {
+        const expiry = new Date(Date.now() + COOKIE_EXPIRY);
+        res.cookie("cookie", valid, { expires: expiry });
+        res.type("text").send("Authentication successful for user " + req.body.user + ".");
+      } else {
+        res.type("text").status(401).send("Provided credentials do not match an existing account.");
+      }
+    } catch (err) {
+      await close(db);
+      res.type("text").status(500)
+        .send("A server error has occurred. Please try your request again later.");
+      logError("Error attempting auth. /auth body params, valid, err: ",
+        [req.body.user, req.body.pass, valid, err]);
+    }
+  } else {
+    res.type("text").status(400).send("Missing required parameters 'user' and/or 'pass'.");
+  }
+});
+
+async function authUser(db, user, pass) {
+  const userDetails = await db.get(q.QUERY_GET_USER, [user])
+  if (userDetails && await bcrypt.compare(pass, userDetails.pass)) {
+    // make them a cookie and store it
+    const cookie = uuid.v4();
+    await db.run(q.INSERT_COOKIE, [cookie, user]);
+    return cookie;
+  }
 }
 
 /**
@@ -240,6 +257,30 @@ function makePost() {
   // move the media, etc
 
   // schedule the next post
+}
+
+async function logError(text, args) {
+  let out = timestamp();
+  out += text + "\r\n";
+  for (const arg of args) {
+    out += arg += "\r\n";
+  }
+
+  await fs.writeFileSync(LOGFILE, out, { flag: "a+" });
+}
+
+/**
+ * For logging purposes. Get a minimal datetime string, formatted such that it could be prepended to
+ * a log line.
+ * @returns {string} a string like "[m/d/yy hh:mi] "
+ */
+function timestamp() {
+  const now = new Date(Date.now());
+  let timeString = now.toLocaleString("en-US",
+    { dateStyle: "short", timeStyle: "short", hourCycle: "h24" });
+  timeString = timeString.replace(",", "");
+  let out = "[" + timeString + "] ";
+  return out;
 }
 
 /**

@@ -74,7 +74,7 @@ IF NOT EXISTS Users
 (
   username TEXT PRIMARY KEY,
   pass BINARY
-(60),
+(60) NOT NULL,
   auth_cookie TEXT,
   _locked BOOLEAN
 );

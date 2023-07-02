@@ -13,4 +13,6 @@ module.exports = {
   QUERY_COMMENTS_RANGE: "SELECT * FROM Comments WHERE content_id BETWEEN ? AND ? " +
     "ORDER BY content_id DESC, ordering",
 
+  QUERY_GET_USER: "SELECT * FROM Users WHERE username = ?",
+  INSERT_COOKIE: "UPDATE Users SET auth_cookie = ? WHERE username = ?"
 }
