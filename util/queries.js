@@ -14,5 +14,7 @@ module.exports = {
     "ORDER BY content_id DESC, ordering",
 
   QUERY_GET_USER: "SELECT * FROM Users WHERE username = ?",
-  INSERT_COOKIE: "UPDATE Users SET auth_cookie = ? WHERE username = ?"
+  INSERT_COOKIE: "UPDATE Users SET auth_cookie = ? WHERE username = ?",
+  // note this will cease to be a good plan if we ever have more than one user account
+  QUERY_IS_AUTHED: "SELECT COUNT(username) AS cnt FROM Users WHERE auth_cookie = ?"
 }

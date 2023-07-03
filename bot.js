@@ -13,11 +13,18 @@ const tumblrHandler = require("./util/tumblr-handler.js");
 const q = require("./util/queries.js");
 // we have a class defined to make handling content objects a little easier
 const Content = require("./util/content.js");
+// timer - if this is non-null, we're going to try to post when the time comes around again
+let postTimer = null;
 
 // the platforms we should post to. most likely, this will be "tumblr" and possibly "cohost"
 const POST_TO = ["tumblr"];
 const DEFAULT_LIMIT = 20;
 const LOGFILE = "tourguide.log";
+const CONFIG = "config.json";
+
+// todo: enums?
+const ERR_AUTH = -1;
+const ERR_PARAM = -2;
 
 const COOKIE_EXPIRY = 1000 * 60 * 60 * 8; // 8 hours, in ms
 const DEFAULT_PORT = 7999;
@@ -87,6 +94,7 @@ app.post("/auth", async (req, res) => {
 
       if (valid) {
         const expiry = new Date(Date.now() + COOKIE_EXPIRY);
+        console.log(expiry);
         res.cookie("cookie", valid, { expires: expiry });
         res.type("text").send("Authentication successful for user " + req.body.user + ".");
       } else {
@@ -103,6 +111,121 @@ app.post("/auth", async (req, res) => {
     res.type("text").status(400).send("Missing required parameters 'user' and/or 'pass'.");
   }
 });
+
+app.post("/status", async (req, res) => {
+  let db;
+  try {
+    console.log(req.cookies);
+    db = await getDBConnection();
+    const isValid = await statusParamsValid(db, req.body.action, req.cookies);
+    await close(db);
+
+    if (isValid === ERR_AUTH) { // bad/missing cookie
+      res.type("text").status(401).send("This request requires a valid authentication cookie.");
+    } else if (isValid === ERR_PARAM) { // bad params
+      res.type("text").status(400)
+        .send("Missing required param 'action' with required value 'stop' or 'go'.");
+
+    } else { // good to go
+      const result = await handleStatusChange(req.body.action);
+      res.type("text").send(result);
+    }
+  } catch (err) { // server exploded
+    console.error(err);
+    await logError("Database error occurred in /status. Body params, err: ",
+      [req.body.action, req.cookies, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+})
+
+/**
+ * Does `action`, either pausing or unpausing the bot. If `action` requests the existing status,
+ * this is a no-op.
+ * @param {string} action req.body.action; should be validated as either 'go' or 'stop' first
+ * @returns {string} the text that should be sent as an API response confirming what changed
+ */
+async function handleStatusChange(action) {
+  // convert to boolean for simpler comparison
+  const active = (action === "go");
+
+  // config file has current status and post time
+  const config = await getConfig();
+
+  let response;
+  if (active) {
+    response = "Unpause command successful; the bot is now unpaused. We'll try to post at " +
+      config.post_time + "."
+  } else {
+    response = "Pause command successful; the bot is now paused.";
+  }
+  // wish i had logical XOR
+  if (active && !config.active) { // unpause
+    postTimer = schedulePost(config.post_time);
+  } else if (!active && config.active) { // pause
+    postTimer = null;
+  } // else, no-op
+
+  // update config file
+  config.active = active;
+  await setConfig(config);
+
+  return response;
+}
+
+function schedulePost(postTime) {
+  /* okay, so... we need the # of ms between now and the next instance of our posting time. to get
+  that, we do some kind of icky Date math. we ignore DST; this method should be used to
+  schedule the next post each day, so only two days out of the year should be incorrect (i hope!)
+  and i consider that a tolerable loss. */
+  const currentTime = new Date(Date.now());
+
+  // start constructing a Date object for when our post should take place
+  const scheduledTime = new Date(Date.now());
+
+  // is the next instance of postTime tomorrow?
+  const postHr = parseInt(postTime.substring(0, postTime.indexOf(":")));
+  const postMin = parseInt(postTime.substring(postTime.indexOf(":") + 1));
+  if (currentTime.getHours() >= postHr && currentTime.getMinutes() > postMin) {
+    // move it forward a day
+    scheduledTime.setDate(scheduledTime.getDate() + 1);
+  }
+
+  // set desired hours/minutes, now that our date is correct
+  scheduledTime.setHours(postHr);
+  scheduledTime.setMinutes(postMin);
+
+  // then just subtract one from the other
+  const ms = scheduledTime - currentTime;
+
+  postTimer = setTimeout(makePost, ms);
+}
+
+async function getConfig() {
+  return JSON.parse(await fs.readFileSync(CONFIG));
+}
+
+async function setConfig(newConfig) {
+  await fs.writeFileSync(CONFIG, JSON.stringify(newConfig, null, 2));
+}
+
+async function statusParamsValid(db, action, cookies) {
+  console.log(cookies);
+  console.log(cookies.cookie);
+  if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
+    return ERR_AUTH;
+  } else if (!action || (action !== "go" && action !== "stop")) {
+    return ERR_PARAM;
+  } else {
+    return 0;
+  }
+}
+
+async function isLoggedIn(db, cookie) {
+  const result = await db.get(q.QUERY_IS_AUTHED, [cookie]);
+  console.log(result);
+  return result.cnt === 1;
+}
 
 async function authUser(db, user, pass) {
   const userDetails = await db.get(q.QUERY_GET_USER, [user])
@@ -244,14 +367,16 @@ function makePost() {
     ['these are', 'some tags'],
     ["video upload attempt again, because there's a phantom 'undefined' up top. wtf?"]);
 
-  for (const platform of POST_TO) {
-    if (platform === "tumblr") {
-      tumblrHandler.postToTumblr(post);
-    }
-    if (platform === "cohost") {
-      // insert a cohost handler here
-    }
-  }
+  console.log("debug: we called makePost! at ");
+  console.log(new Date(Date.now()));
+  // for (const platform of POST_TO) {
+  //   if (platform === "tumblr") {
+  //     tumblrHandler.postToTumblr(post);
+  //   }
+  //   if (platform === "cohost") {
+  //     // insert a cohost handler here
+  //   }
+  //}
 
   // do housekeeping - do the SQL queries to put this post in the archive, record the post date,
   // move the media, etc
@@ -263,7 +388,8 @@ async function logError(text, args) {
   let out = timestamp();
   out += text + "\r\n";
   for (const arg of args) {
-    out += arg += "\r\n";
+    out += arg;
+    out += "\r\n";
   }
 
   await fs.writeFileSync(LOGFILE, out, { flag: "a+" });
@@ -309,6 +435,13 @@ async function getDBConnection() {
   return db;
 }
 
+async function onBoot() {
+  const config = await getConfig();
+  schedulePost(config.post_time);
+
+}
+
+onBoot();
 app.use(express.static("public"));
 const PORT = process.env.PORT || DEFAULT_PORT;
 app.listen(PORT);
