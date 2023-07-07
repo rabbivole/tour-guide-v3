@@ -21,6 +21,8 @@ const POST_TO = ["tumblr"];
 const DEFAULT_LIMIT = 20;
 const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
+// if true, don't actually post anywhere
+const DEBUG = true;
 
 // todo: enums?
 const ERR_AUTH = -1;
@@ -115,7 +117,6 @@ app.post("/auth", async (req, res) => {
 app.post("/status", async (req, res) => {
   let db;
   try {
-    console.log(req.cookies);
     db = await getDBConnection();
     const isValid = await statusParamsValid(db, req.body.action, req.cookies);
     await close(db);
@@ -130,7 +131,7 @@ app.post("/status", async (req, res) => {
       const result = await handleStatusChange(req.body.action);
       res.type("text").send(result);
     }
-  } catch (err) { // server exploded
+  } catch (err) { // db exploded
     console.error(err);
     await logError("Database error occurred in /status. Body params, err: ",
       [req.body.action, req.cookies, err]);
@@ -138,6 +139,72 @@ app.post("/status", async (req, res) => {
       .send("A server error has occurred. Please try your request again later.");
   }
 })
+
+app.post("/schedule", async (req, res) => {
+  let db;
+  try {
+    db = await getDBConnection();
+    const isValid = await scheduleParamsValid(db, req.body.time, req.cookies);
+    await close(db);
+
+    if (isValid === ERR_AUTH) { // bad/missing cookie
+      res.type("text").status(401).send("This request requires a valid authentication cookie.");
+    } else if (isValid === ERR_PARAM) { // bad param
+      res.type("text").status(400)
+        .send("Missing required param 'time', or 'time' was not parseable as a valid HH:MM UTC time.");
+
+    } else { // good to go
+      const result = await handleTimeChange(req.body.time);
+      res.type("text").send(result);
+    }
+  } catch (err) { // db exploded
+    console.error(err);
+    await logError("Database error occurred in /schedule. Body params, err: ",
+      [req.body.time, req.cookies, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+});
+
+async function handleTimeChange(time) {
+  // change the time in the config
+  const cfg = await getConfig();
+  cfg.post_time = time;
+  await setConfig(cfg);
+
+  // if the bot is running, reschedule posting
+  if (cfg.active) {
+    schedulePost(time);
+  }
+
+  return "Post time scheduled for " + time + ".";
+
+}
+
+async function scheduleParamsValid(db, time, cookies) {
+  if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
+    return ERR_AUTH;
+  } else if (!time || !parseTime(time).hour) {
+    return ERR_PARAM;
+  }
+
+  return 0;
+}
+
+function parseTime(time) {
+  const hour = time.substring(0, time.indexOf(":"));
+  const mins = time.substring(time.indexOf(":") + 1);
+
+  if (time.indexOf(":") === -1 || // no :
+    hour === "" || mins === "" || // malformed somehow
+    Number.isNaN(hour) || Number.isNaN(mins) || // non-numeric
+    hour < 0 || hour > 24 || mins < 0 || mins > 59 // bounds checking
+  ) {
+    return { hour: null, mins: null };
+  }
+
+  return { hour, mins };
+}
 
 /**
  * Does `action`, either pausing or unpausing the bot. If `action` requests the existing status,
@@ -178,26 +245,24 @@ function schedulePost(postTime) {
   that, we do some kind of icky Date math. we ignore DST; this method should be used to
   schedule the next post each day, so only two days out of the year should be incorrect (i hope!)
   and i consider that a tolerable loss. */
+  let { hour, mins } = parseTime(postTime);
   const currentTime = new Date(Date.now());
 
   // start constructing a Date object for when our post should take place
   const scheduledTime = new Date(Date.now());
 
   // is the next instance of postTime tomorrow?
-  const postHr = parseInt(postTime.substring(0, postTime.indexOf(":")));
-  const postMin = parseInt(postTime.substring(postTime.indexOf(":") + 1));
-  if (currentTime.getHours() >= postHr && currentTime.getMinutes() > postMin) {
+  if (currentTime.getHours() >= hour && currentTime.getMinutes() > mins) {
     // move it forward a day
     scheduledTime.setDate(scheduledTime.getDate() + 1);
   }
 
   // set desired hours/minutes, now that our date is correct
-  scheduledTime.setHours(postHr);
-  scheduledTime.setMinutes(postMin);
+  scheduledTime.setHours(hour);
+  scheduledTime.setMinutes(mins);
 
   // then just subtract one from the other
   const ms = scheduledTime - currentTime;
-
   postTimer = setTimeout(makePost, ms);
 }
 
@@ -210,8 +275,6 @@ async function setConfig(newConfig) {
 }
 
 async function statusParamsValid(db, action, cookies) {
-  console.log(cookies);
-  console.log(cookies.cookie);
   if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
     return ERR_AUTH;
   } else if (!action || (action !== "go" && action !== "stop")) {
@@ -352,9 +415,8 @@ async function getLastPostId(db) {
   return (await db.get(q.QUERY_MAX_ID)).before_id;
 }
 
-function makePost() {
-  // debug post for now:
-  const post = new Content(
+async function makePost() {
+  const debugPost = new Content(
     {
       author: "dickman",
       title: "gm_butts.bsp",
@@ -367,21 +429,27 @@ function makePost() {
     ['these are', 'some tags'],
     ["video upload attempt again, because there's a phantom 'undefined' up top. wtf?"]);
 
-  console.log("debug: we called makePost! at ");
-  console.log(new Date(Date.now()));
-  // for (const platform of POST_TO) {
-  //   if (platform === "tumblr") {
-  //     tumblrHandler.postToTumblr(post);
-  //   }
-  //   if (platform === "cohost") {
-  //     // insert a cohost handler here
-  //   }
-  //}
+  if (DEBUG) {
+    console.log("debug: we called makePost! at ");
+    console.log(new Date(Date.now()));
+  } else {
+    for (const platform of POST_TO) {
+      if (platform === "tumblr") {
+        tumblrHandler.postToTumblr(post);
+      }
+      if (platform === "cohost") {
+        // insert a cohost handler here
+      }
+    }
 
-  // do housekeeping - do the SQL queries to put this post in the archive, record the post date,
-  // move the media, etc
+    // put this post in the archive db
 
-  // schedule the next post
+    // move the media
+
+    // schedule the next post
+    const cfg = await getConfig();
+    schedulePost(cfg.post_time);
+  }
 }
 
 async function logError(text, args) {
