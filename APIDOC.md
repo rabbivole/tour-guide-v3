@@ -103,7 +103,7 @@ Post time set to 15:00 UTC.
 ```
 
 **Error Handling:**
-- If `time` is not parseable as a valid 24-hour time, returns `400 [text] {time} is not a valid 24-hour time.`
+- If `time` is not parseable as a valid 24-hour time or a `time` body parameter is not present, returns `400 [text] Missing required param 'time', or 'time' was not parseable as a valid HH:MM UTC time.`
 - If a `time` body parameter is not present, returns `400 [text] Missing required request parameter {time}, a 24-hour time string.`
 - The API does not know that you have beefed it converting between timezones and cannot return this as an error.
 
