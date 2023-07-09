@@ -8,6 +8,19 @@ const uuid = require("uuid");
 const cookieParser = require("cookie-parser");
 const fs = require("fs");
 
+// multer file upload bucket
+// not confident about 'cb'. it seems like they're callback functions multer provides
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "public/img-holding");
+  },
+  filename: (req, file, cb) => {
+    // this is how we compute the name of the output file. this'll need to be retouched later
+    cb(null, file.originalname);
+  }
+})
+const upload = multer({ storage: storage });
+
 const tumblrHandler = require("./util/tumblr-handler.js");
 // canned sql
 const q = require("./util/queries.js");
@@ -30,13 +43,14 @@ const ERR_PARAM = -2;
 
 const COOKIE_EXPIRY = 1000 * 60 * 60 * 8; // 8 hours, in ms
 const DEFAULT_PORT = 7999;
+
 const app = express();
-// [lecture code copypasta] for application/x-www-form-urlencoded
+// for application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true })); // built-in middleware
 // for application/json
 app.use(express.json()); // built-in middleware
-// for multipart/form-data (required with FormData)
-app.use(multer().none()); // requires the "multer" module
+// for multipart/form-data
+//app.use(multer().none()); // requires the "multer" module
 app.use(cookieParser());
 
 // note - does not currently support searching, because that's going to be complicated
@@ -86,7 +100,7 @@ app.get("/posts", async (req, res) => {
   }
 });
 
-app.post("/auth", async (req, res) => {
+app.post("/auth", upload.none(), async (req, res) => {
   let db;
   if (req.body.user && req.body.pass) {
     try {
@@ -114,7 +128,7 @@ app.post("/auth", async (req, res) => {
   }
 });
 
-app.post("/status", async (req, res) => {
+app.post("/status", upload.none(), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
@@ -140,7 +154,7 @@ app.post("/status", async (req, res) => {
   }
 })
 
-app.post("/schedule", async (req, res) => {
+app.post("/schedule", upload.none(), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
@@ -165,6 +179,55 @@ app.post("/schedule", async (req, res) => {
       .send("A server error has occurred. Please try your request again later.");
   }
 });
+
+app.post("/add-post", upload.array('media'), async (req, res) => {
+  let db;
+  try {
+    db = await getDBConnection();
+    console.log(req.files);
+    //const isValid = await addParamsValid(db, req.body.meta, req.files, req.cookies);
+    const isValid = 0;
+    await close(db);
+
+    if (isValid === ERR_AUTH) {
+      res.type("text").status(401).send("This request requires a valid authentication cookie.");
+    } else if (isValid === ERR_PARAM) {
+      res.type("text").status(400)
+        .send("Faulty body parameters for /add-post. (todo: be more detailed)");
+
+    } else {
+      console.log(req.body);
+      console.log(req.files);
+      res.type("text").send("done");
+
+    }
+  } catch (err) { // some kind of error- could be DB, could be file system related
+    console.error(err);
+    await logError("Error occurred in /add-post. Body params, err: ",
+      [req.body.meta, req.files, req.cookies, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+});
+
+async function addParamsValid(db, meta, media, cookies) {
+  // todo: may want more detailed error feedback
+  if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
+    return ERR_AUTH;
+  } else if (!meta) { // meta content object must exist
+    return ERR_PARAM;
+  } else if (meta.map_info && !meta.map_info.title ||
+    !meta.map_info.author ||
+    !meta.map_info.source_url ||
+    !media) { // if mapinfo exists, all 3 fields and media must exist
+    return ERR_PARAM;
+  } else if (!meta.map_info && !meta.comments) { // if mapinfo doesn't exist, comments must exist
+    return ERR_PARAM;
+  }
+
+  // not doing any detailed media verification rn
+  return 0;
+}
 
 async function handleTimeChange(time) {
   // change the time in the config
@@ -252,7 +315,8 @@ function schedulePost(postTime) {
   const scheduledTime = new Date(Date.now());
 
   // is the next instance of postTime tomorrow?
-  if (currentTime.getHours() >= hour && currentTime.getMinutes() > mins) {
+  if (currentTime.getHours() > hour ||
+    (currentTime.getHours() === hour && currentTime.getMinutes() > mins)) {
     // move it forward a day
     scheduledTime.setDate(scheduledTime.getDate() + 1);
   }
@@ -263,6 +327,7 @@ function schedulePost(postTime) {
 
   // then just subtract one from the other
   const ms = scheduledTime - currentTime;
+  console.log(ms);
   postTimer = setTimeout(makePost, ms);
 }
 
