@@ -8,11 +8,13 @@ const uuid = require("uuid");
 const cookieParser = require("cookie-parser");
 const fs = require("fs");
 
+// put media here initially until we verify the request
+const TEMP_BUFFER = "media-buffer";
 // multer file upload bucket
 // not confident about 'cb'. it seems like they're callback functions multer provides
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "public/img-holding");
+    cb(null, TEMP_BUFFER);
   },
   filename: (req, file, cb) => {
     // this is how we compute the name of the output file. this'll need to be retouched later
@@ -26,8 +28,6 @@ const tumblrHandler = require("./util/tumblr-handler.js");
 const q = require("./util/queries.js");
 // we have a class defined to make handling content objects a little easier
 const Content = require("./util/content.js");
-// trying to hack together some auth homebrew middleware lol
-const auth = require("./util/auth.js");
 
 // timer - if this is non-null, we're going to try to post when the time comes around again
 let postTimer = null;
@@ -39,6 +39,7 @@ const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
 // if true, don't actually post anywhere
 const DEBUG = true;
+const IMG_DIR = "public/media";
 
 // todo: enums?
 const ERR_AUTH = -1;
@@ -183,51 +184,98 @@ app.post("/schedule", upload.none(), async (req, res) => {
   }
 });
 
-app.post("/add-post", auth.authorizeUser, upload.array('media'), async (req, res) => {
+app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
-    const isValid = await addParamsValid(db, req.body, req.files, req.cookies);
-    //const isValid = 0;
+    const isValid = await addParamsValid(db, req.body, req.files);
     await close(db);
 
-    console.log(isValid);
-
-    if (isValid === ERR_AUTH) {
-      res.type("text").status(401).send("This request requires a valid authentication cookie.");
-    } else if (isValid === ERR_PARAM) {
+    if (isValid === ERR_PARAM) { // some kind of invalid post
       res.type("text").status(400)
         .send("Faulty body parameters for /add-post. (todo: be more detailed)");
 
-    } else {
-      console.log(req.body);
-      console.log(req.files);
+    } else { // good to go
+      // move images from temp folder to media
+      await moveFiles(req.files);
       res.type("text").send("done");
-
     }
+    await cleanUpTemp();
   } catch (err) { // some kind of error- could be DB, could be file system related
+    await close(db);
     console.error(err);
     await logError("Error occurred in /add-post. Body params, err: ",
-      [req.body.meta, req.files, req.cookies, err]);
+      [req.body, req.files, req.cookies, err]);
     res.type("text").status(500)
       .send("A server error has occurred. Please try your request again later.");
   }
 });
 
-async function addParamsValid(db, meta, media, cookies) {
+/**
+ * If any files are hanging around in the media buffer, delete them.
+ */
+async function cleanUpTemp() {
+  try {
+    const dir = await fs.readdirSync(TEMP_BUFFER);
+    for (const file of dir) {
+      await fs.unlinkSync(TEMP_BUFFER + "/" + file);
+    }
+  } catch (err) {
+    console.error(err);
+    logError("Error while trying to clean up temp directory. Error: ", [err]);
+  }
+}
+
+async function moveFiles(files) {
+  for (const file of files) {
+    const oldPath = file.destination + "/" + file.filename;
+    const newPath = IMG_DIR + "/" + file.filename;
+    await fs.renameSync(oldPath, newPath);
+  }
+}
+
+/**
+ * Middleware function to sit before Multer and make sure the /add-post caller is authenticated.
+ *
+ * If we *don't* do this, Multer's upload
+ * handling will dump the files into the storage even if we later find out the caller wasn't
+ * authorized. This would be bad!
+ * @param {Request} req express HTTP request object
+ * @param {Response} res express HTTP response object
+ * @param {NextFunction} next express middleware iterator function thing
+ */
+async function authCheck(req, res, next) {
+  let db;
+  try {
+    db = await getDBConnection();
+    if (!req.cookies || !(await isLoggedIn(db, req.cookies.cookie))) {
+      await close(db);
+      res.type("text").status(401).send("This request requires a valid authentication cookie.");
+    } else {
+      await close(db);
+      // pass along to next middleware
+      next();
+    }
+  } catch (err) {
+    console.error(err);
+    logError("Error while trying to run authentication middleware. Cookie, err: ",
+      [cookies, err]);
+  }
+}
+
+async function addParamsValid(db, meta, media) {
   // todo: may want more detailed error feedback
-  if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
-    return ERR_AUTH;
-  } else if (!meta) { // meta content object must exist
+  if (!meta) { // meta content object must exist
     console.log("meta was null");
     return ERR_PARAM;
   } else if ( // if mapinfo exists, all 3 fields and media must exist
-    (meta.title && (!meta.author || !meta["source-url"] || !media)) ||
-    (meta.author && (!meta.title || !meta["source-url"] || !media)) ||
-    (meta["source-url"] && (!meta.title || !meta.author || !media))) {
-    console.log(meta.title, meta.author, meta["source-url"], media);
+    (meta.title && (!meta.author || !meta.source_url || !media)) ||
+    (meta.author && (!meta.title || !meta.source_url || !media)) ||
+    (meta.source_url && (!meta.title || !meta.author || !media))) {
+    console.log(meta.title, meta.author, meta.source_url, media);
     return ERR_PARAM;
   } else if (!meta.title && !meta.comments) { // if mapinfo doesn't exist, comments must exist
+    console.log(meta.title, meta.comments);
     return ERR_PARAM;
   }
 
@@ -527,7 +575,8 @@ async function logError(text, args) {
   let out = timestamp();
   out += text + "\r\n";
   for (const arg of args) {
-    out += arg;
+    // to hopefully print something more useful than 'Object object'
+    out += JSON.stringify(arg);
     out += "\r\n";
   }
 
