@@ -15,14 +15,23 @@
 </head>
 
 <body>
-  <p>
-    This is a really ugly placeholder for what will later be an actual 'create post and add to
-    queue' form.
-  </p>
-  <form id="the-form">
-    <input type="file" name="media" multiple>
-    <input type="submit" value="send">
-  </form>
+  <article class="card">
+    <p>
+      This is a really ugly placeholder for what will later be an actual 'create post and add to
+      queue' form.
+    </p>
+    <form id="the-form">
+      <input type="text" name="title" placeholder="title">
+      <input type="text" name="author" placeholder="map author">
+      <input type="url" name="source-url" placeholder="source url">
+      <input type="checkbox" name="flashing" title="is map flashy?">
+      <input type="text" name="tags" placeholder="optional tags">
+      <textarea name="comments" placeholder="optional comments"></textarea>
+      <input type="file" name="media" multiple>
+      <input type="submit" value="send">
+    </form>
+  </article>
+
 </body>
 
 </html>

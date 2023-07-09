@@ -26,6 +26,9 @@ const tumblrHandler = require("./util/tumblr-handler.js");
 const q = require("./util/queries.js");
 // we have a class defined to make handling content objects a little easier
 const Content = require("./util/content.js");
+// trying to hack together some auth homebrew middleware lol
+const auth = require("./util/auth.js");
+
 // timer - if this is non-null, we're going to try to post when the time comes around again
 let postTimer = null;
 
@@ -180,14 +183,15 @@ app.post("/schedule", upload.none(), async (req, res) => {
   }
 });
 
-app.post("/add-post", upload.array('media'), async (req, res) => {
+app.post("/add-post", auth.authorizeUser, upload.array('media'), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
-    console.log(req.files);
-    //const isValid = await addParamsValid(db, req.body.meta, req.files, req.cookies);
-    const isValid = 0;
+    const isValid = await addParamsValid(db, req.body, req.files, req.cookies);
+    //const isValid = 0;
     await close(db);
+
+    console.log(isValid);
 
     if (isValid === ERR_AUTH) {
       res.type("text").status(401).send("This request requires a valid authentication cookie.");
@@ -215,13 +219,15 @@ async function addParamsValid(db, meta, media, cookies) {
   if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
     return ERR_AUTH;
   } else if (!meta) { // meta content object must exist
+    console.log("meta was null");
     return ERR_PARAM;
-  } else if (meta.map_info && !meta.map_info.title ||
-    !meta.map_info.author ||
-    !meta.map_info.source_url ||
-    !media) { // if mapinfo exists, all 3 fields and media must exist
+  } else if ( // if mapinfo exists, all 3 fields and media must exist
+    (meta.title && (!meta.author || !meta["source-url"] || !media)) ||
+    (meta.author && (!meta.title || !meta["source-url"] || !media)) ||
+    (meta["source-url"] && (!meta.title || !meta.author || !media))) {
+    console.log(meta.title, meta.author, meta["source-url"], media);
     return ERR_PARAM;
-  } else if (!meta.map_info && !meta.comments) { // if mapinfo doesn't exist, comments must exist
+  } else if (!meta.title && !meta.comments) { // if mapinfo doesn't exist, comments must exist
     return ERR_PARAM;
   }
 
@@ -316,7 +322,7 @@ function schedulePost(postTime) {
 
   // is the next instance of postTime tomorrow?
   if (currentTime.getHours() > hour ||
-    (currentTime.getHours() === hour && currentTime.getMinutes() > mins)) {
+    (currentTime.getHours() == hour && currentTime.getMinutes() > mins)) {
     // move it forward a day
     scheduledTime.setDate(scheduledTime.getDate() + 1);
   }

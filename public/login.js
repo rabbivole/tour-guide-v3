@@ -8,26 +8,57 @@
 "use strict";
 (function () {
 
+  const REDIRECT_TIMEOUT = 3000;
+
   window.addEventListener("load", init);
 
   function init() {
-    id("the-form").addEventListener("submit", function (evt) {
+    id("login").addEventListener("submit", function (evt) {
       evt.preventDefault();
-      submitForm(this);
-    })
+      submitAuth(this);
+    });
   }
 
-  async function submitForm(form) {
+  async function submitAuth(form) {
     const data = new FormData(form);
     try {
-      let res = await fetch("/add-post", { method: "POST", body: data });
-      console.log(res);
+      let res = await fetch("/auth", { method: "POST", body: data });
+      if (!res.ok) {
+        console.error(res);
+        throw new Error("bounce into catch");
+      }
+      onLogIn();
     } catch (err) {
       console.error(err);
+      displayAlert(makeError("you blew it, kid"));
     }
-
   }
 
+  function onLogIn() {
+    displayAlert(makeAlert("your cookie, sire"));
+
+    setTimeout(() => {
+      window.location.replace("/create.html");
+    }, REDIRECT_TIMEOUT);
+  }
+
+  function displayAlert(element) {
+    qs("body").appendChild(element);
+  }
+
+  function makeAlert(text) {
+    const alert = gen("p");
+    alert.textContent = text;
+    alert.classList.add("alert-good");
+    return alert;
+  }
+
+  function makeError(text) {
+    const err = gen("p");
+    err.textContent = text;
+    err.classList.add("alert-bad");
+    return err;
+  }
 
   /**
    * Helper function to return the response's result text if successful, otherwise
