@@ -78,7 +78,7 @@ Authentication successful for user {user}.
 
 ***
 
-The remaining endpoints are administrative and require a valid authentication cookie. Requests missing a valid cookie will get the response `401 [text] You are not authenticated to perform this action.`
+The remaining endpoints are administrative and require a valid authentication cookie. Requests missing a valid cookie will get the response `401 [text] This request requires a valid authentication cookie.`
 
 ## <span style="color:blue">**POST**</span> Set the posting time
 
@@ -163,7 +163,7 @@ Files that you upload should be named the way you want them to exist in the arch
 **Example Response:** `[json]`
 ```json
 {
-  status: "successful - Naming conflict detected! Media filenames have been edited.",
+  status: "successful",
   content: {
     map_info: {
       title: "gm_butts.bsp",

@@ -10,6 +10,7 @@ const fs = require("fs");
 
 // put media here initially until we verify the request
 const TEMP_BUFFER = "media-buffer";
+const IMG_DIR = "public/media";
 // multer file upload bucket
 // not confident about 'cb'. it seems like they're callback functions multer provides
 const storage = multer.diskStorage({
@@ -38,11 +39,15 @@ const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
 // if true, don't actually post anywhere
 const DEBUG = true;
-const IMG_DIR = "public/media";
 
-// todo: enums?
+// enums for possible user errors:
 const ERR_AUTH = -1;
+// catchall 400. in add-post, this is 'you didn't attach a body'
 const ERR_PARAM = -2;
+// add-post error: if a post has no mapinfo, it must contain comments.
+const ERR_MINIMAL_CONTENT = -3;
+// add-post error: if one piece of mapInfo exists, all 3 of the fields + media must exist.
+const ERR_INCOMPLETE_MAPINFO = -4;
 
 const COOKIE_EXPIRY = 1000 * 60 * 60 * 8; // 8 hours, in ms
 const DEFAULT_PORT = 7999;
@@ -190,18 +195,27 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
     const isValid = await addParamsValid(db, req.body, req.files);
     await close(db);
 
-    if (isValid === ERR_PARAM) { // some kind of invalid post
+    if (isValid === ERR_PARAM) { // no body
       res.type("text").status(400)
-        .send("Faulty body parameters for /add-post. (todo: be more detailed)");
-
+        .send("Missing body for /add-post.");
+    } else if (isValid === ERR_INCOMPLETE_MAPINFO) {
+      res.type("text").status(400)
+        .send("Missing some parts of required map information. If title/author/url are present, " +
+          "all three of them must be, as well as media.");
+    } else if (isValid === ERR_MINIMAL_CONTENT) {
+      res.type("text").status(400)
+        .send("Missing minimally required content for a post. A post must either include some " +
+          "comments or have info about a map + some media for it.");
     } else { // good to go
       // move images from temp folder to media
       await moveFiles(req.files);
-      res.type("text").send("done");
+      const responseObject = buildResponse(req.body, req.files);
+      console.log("sent response: ");
+      console.log(responseObject);
+      res.json(responseObject);
     }
     await cleanUpTemp();
   } catch (err) { // some kind of error- could be DB, could be file system related
-    await close(db);
     console.error(err);
     await logError("Error occurred in /add-post. Body params, err: ",
       [req.body, req.files, req.cookies, err]);
@@ -209,6 +223,47 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
       .send("A server error has occurred. Please try your request again later.");
   }
 });
+
+function buildResponse(body, files) {
+  const response = {
+    status: "successful"
+  };
+
+  const flashing = body.flashing && body.flashing === "on" ? true : false;
+
+  // pile in all the media
+  let media = [];
+  for (const file of files) {
+    media.push(file.filename);
+  }
+
+  // tags will be comma-separated
+  let tags = body.tags ? body.tags.split(",") : [];
+
+  // comment processing is a little hairier. there's almost certainly a more elegant method here
+  const regex = new RegExp("\\n");
+  let comments = [];
+  if (body.comments) {
+    comments = body.comments
+      .split(regex)
+      .map(line => line.trim())
+      .filter(line => line !== ""); // remove stray "" elements left by double linebreaks
+  }
+
+  response.content = new Content(
+    {
+      title: body.title,
+      author: body.author,
+      url: body["source-url"]
+    },
+    media,
+    flashing,
+    tags,
+    comments
+  );
+
+  return response;
+}
 
 async function computeFilename(oldName, suffix) {
   // the nature of try-catch means we're doing this recursively in place of what would be a while
@@ -293,7 +348,7 @@ async function authCheck(req, res, next) {
 
 async function addParamsValid(db, meta, media) {
   // todo: may want more detailed error feedback
-  if (!meta) { // meta content object must exist
+  if (!meta) { // body must exist
     console.log("meta was null");
     return ERR_PARAM;
   } else if ( // if mapinfo exists, all 3 fields and media must exist
@@ -301,10 +356,10 @@ async function addParamsValid(db, meta, media) {
     (meta.author && (!meta.title || !meta["source-url"] || !media)) ||
     (meta["source-url"] && (!meta.title || !meta.author || !media))) {
     console.log(meta.title, meta.author, meta["source-url"], media);
-    return ERR_PARAM;
+    return ERR_INCOMPLETE_MAPINFO;
   } else if (!meta.title && !meta.comments) { // if mapinfo doesn't exist, comments must exist
     console.log(meta.title, meta.comments);
-    return ERR_PARAM;
+    return ERR_MINIMAL_CONTENT;
   }
 
   // not doing any detailed media verification rn
