@@ -16,9 +16,8 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, TEMP_BUFFER);
   },
-  filename: (req, file, cb) => {
-    // this is how we compute the name of the output file. this'll need to be retouched later
-    cb(null, file.originalname);
+  filename: async (req, file, cb) => { // this function determines a name for each file
+    cb(null, await computeFilename(file.originalname, 0));
   }
 })
 const upload = multer({ storage: storage });
@@ -211,6 +210,35 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
   }
 });
 
+async function computeFilename(oldName, suffix) {
+  // the nature of try-catch means we're doing this recursively in place of what would be a while
+  let filename;
+  // if we're looking for a suffixed file, append it
+  if (suffix != 0) {
+    filename = oldName.substring(0, oldName.indexOf(".")) + "(" + suffix + ")" +
+      oldName.substring(oldName.indexOf("."));
+  } else {
+    filename = oldName;
+  }
+  try {
+    // does it exist?
+    await fs.statSync(IMG_DIR + "/" + filename);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      // the current filename doesn't exist! so we can safely return it
+      return filename;
+    } else { // something else terrible happened
+      console.error(err);
+      logError("Error trying to check if file exists. Filename, err: ",
+        [oldName, err]);
+      return null;
+    }
+  }
+  // if we're here, that name is taken. increment the suffix and try again:
+  const newSuffix = parseInt(suffix) + 1;
+  return computeFilename(oldName, newSuffix);
+}
+
 /**
  * If any files are hanging around in the media buffer, delete them.
  */
@@ -269,10 +297,10 @@ async function addParamsValid(db, meta, media) {
     console.log("meta was null");
     return ERR_PARAM;
   } else if ( // if mapinfo exists, all 3 fields and media must exist
-    (meta.title && (!meta.author || !meta.source_url || !media)) ||
-    (meta.author && (!meta.title || !meta.source_url || !media)) ||
-    (meta.source_url && (!meta.title || !meta.author || !media))) {
-    console.log(meta.title, meta.author, meta.source_url, media);
+    (meta.title && (!meta.author || !meta["source-url"] || !media)) ||
+    (meta.author && (!meta.title || !meta["source-url"] || !media)) ||
+    (meta["source-url"] && (!meta.title || !meta.author || !media))) {
+    console.log(meta.title, meta.author, meta["source-url"], media);
     return ERR_PARAM;
   } else if (!meta.title && !meta.comments) { // if mapinfo doesn't exist, comments must exist
     console.log(meta.title, meta.comments);
