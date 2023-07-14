@@ -21,6 +21,7 @@
     const data = new FormData(form);
     try {
       let res = await fetch("/add-post", { method: "POST", body: data });
+      await res.json();
       console.log(res);
     } catch (err) {
       console.error(err);

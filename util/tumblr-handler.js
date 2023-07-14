@@ -199,7 +199,7 @@ function processMapMeta(mapInfo, blurb) {
   mapMetaContent.push({
     type: "text",
     subtype: "heading2",
-    text: "by " + mapInfo.author
+    text: "by: " + mapInfo.author
   });
 
   mapMetaContent.push({
@@ -291,6 +291,11 @@ function formatForTumblr(content) {
     });
     // add before any videos
     totalPosts = imagePosts.concat(totalPosts);
+  }
+
+  // special handling for text-only posts- in this case, totalPosts will be empty here
+  if (totalPosts.length === 0) {
+    totalPosts.push(content.clone());
   }
 
   // if comments, add them back to the final post

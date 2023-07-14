@@ -37,8 +37,9 @@ const POST_TO = ["tumblr"];
 const DEFAULT_LIMIT = 20;
 const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
+const QUEUE = "queue.json";
 // if true, don't actually post anywhere
-const DEBUG = true;
+const DEBUG = false;
 
 // enums for possible user errors:
 const ERR_AUTH = -1;
@@ -162,11 +163,12 @@ app.post("/status", upload.none(), async (req, res) => {
   }
 })
 
-app.post("/schedule", upload.none(), async (req, res) => {
+app.post("/schedule", authCheck, upload.none(), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
-    const isValid = await scheduleParamsValid(db, req.body.time, req.cookies);
+    console.log(req.cookies);
+    const isValid = await scheduleParamsValid(db, req.body.time);
     await close(db);
 
     if (isValid === ERR_AUTH) { // bad/missing cookie
@@ -209,7 +211,8 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
     } else { // good to go
       // move images from temp folder to media
       await moveFiles(req.files);
-      const responseObject = buildResponse(req.body, req.files);
+      const responseObject = buildPostFromRequest(req.body, req.files);
+      await enqueue(responseObject);
       console.log("sent response: ");
       console.log(responseObject);
       res.json(responseObject);
@@ -224,17 +227,29 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
   }
 });
 
-function buildResponse(body, files) {
-  const response = {
-    status: "successful"
-  };
+async function enqueue(post) {
+  // get queue
+  try {
+    const queue = JSON.parse(await fs.readFileSync(QUEUE));
+    // and append to it
+    queue.push(post);
+    console.log(queue);
+    // set queue
+    await fs.writeFileSync(QUEUE, JSON.stringify(queue, null, 2));
+  } catch (err) {
+    console.error(err);
+    logError("Error in enqueue. Post, err: ", [post, err]);
+  }
+}
 
+function buildPostFromRequest(body, files) {
   const flashing = body.flashing && body.flashing === "on" ? true : false;
 
   // pile in all the media
   let media = [];
   for (const file of files) {
-    media.push(file.filename);
+    // todo fiddle with IMG_DIR so this doesn't suck so bad lmao
+    media.push(__dirname + "/" + IMG_DIR + "/" + file.filename);
   }
 
   // tags will be comma-separated
@@ -250,11 +265,11 @@ function buildResponse(body, files) {
       .filter(line => line !== ""); // remove stray "" elements left by double linebreaks
   }
 
-  response.content = new Content(
+  const response = new Content(
     {
-      title: body.title,
-      author: body.author,
-      url: body["source-url"]
+      title: body.title || null,
+      author: body.author || null,
+      url: body["source-url"] || null
     },
     media,
     flashing,
@@ -331,6 +346,7 @@ async function authCheck(req, res, next) {
   let db;
   try {
     db = await getDBConnection();
+    console.log(req.cookies);
     if (!req.cookies || !(await isLoggedIn(db, req.cookies.cookie))) {
       await close(db);
       res.type("text").status(401).send("This request requires a valid authentication cookie.");
@@ -347,14 +363,14 @@ async function authCheck(req, res, next) {
 }
 
 async function addParamsValid(db, meta, media) {
-  // todo: may want more detailed error feedback
+  console.log(media);
   if (!meta) { // body must exist
     console.log("meta was null");
     return ERR_PARAM;
   } else if ( // if mapinfo exists, all 3 fields and media must exist
-    (meta.title && (!meta.author || !meta["source-url"] || !media)) ||
-    (meta.author && (!meta.title || !meta["source-url"] || !media)) ||
-    (meta["source-url"] && (!meta.title || !meta.author || !media))) {
+    (meta.title && (!meta.author || !meta["source-url"] || media.length === 0)) ||
+    (meta.author && (!meta.title || !meta["source-url"] || media.length === 0)) ||
+    (meta["source-url"] && (!meta.title || !meta.author || media.length === 0))) {
     console.log(meta.title, meta.author, meta["source-url"], media);
     return ERR_INCOMPLETE_MAPINFO;
   } else if (!meta.title && !meta.comments) { // if mapinfo doesn't exist, comments must exist
@@ -381,10 +397,8 @@ async function handleTimeChange(time) {
 
 }
 
-async function scheduleParamsValid(db, time, cookies) {
-  if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
-    return ERR_AUTH;
-  } else if (!time || !parseTime(time).hour) {
+async function scheduleParamsValid(db, time) {
+  if (!time || !parseTime(time).hour) {
     return ERR_PARAM;
   }
 
@@ -440,6 +454,8 @@ async function handleStatusChange(action) {
   return response;
 }
 
+// todo: scheduling likely needs to be entirely rewritten so that we only post one piece of content
+// per day
 function schedulePost(postTime) {
   /* okay, so... we need the # of ms between now and the next instance of our posting time. to get
   that, we do some kind of icky Date math. we ignore DST; this method should be used to
@@ -635,22 +651,53 @@ async function makePost() {
     console.log("debug: we called makePost! at ");
     console.log(new Date(Date.now()));
   } else {
-    for (const platform of POST_TO) {
-      if (platform === "tumblr") {
-        tumblrHandler.postToTumblr(post);
-      }
-      if (platform === "cohost") {
-        // insert a cohost handler here
+    console.log("OKAY THIS IS HAPPENING");
+    const post = await pollQueue();
+    if (post) {
+      for (const platform of POST_TO) {
+        if (platform === "tumblr") {
+          await tumblrHandler.postToTumblr(post);
+        }
+        if (platform === "cohost") {
+          // insert a cohost handler here
+        }
       }
     }
 
     // put this post in the archive db
 
-    // move the media
-
     // schedule the next post
     const cfg = await getConfig();
-    schedulePost(cfg.post_time);
+    // but wait a bit to cool off so the scheduler doesn't get too excited and just keep posting
+    // (todo: please fix this)
+    setTimeout(() => {
+      schedulePost(cfg.post_time);
+    }, 1000 * 120);
+
+  }
+}
+
+async function pollQueue() {
+  // get queue
+  try {
+    const queue = JSON.parse(await fs.readFileSync(QUEUE));
+    // if it's empty, don't do anything
+    if (queue.length === 0) {
+      return null;
+    }
+
+    // poll
+    const polled = queue[0];
+    const post = new Content(polled.mapInfo, polled.media, polled.flashing, polled.tags,
+      polled.comments);
+    queue.splice(0, 1);
+    await fs.writeFileSync(QUEUE, JSON.stringify(queue, null, 2));
+
+    return post;
+
+  } catch (err) {
+    console.error(err);
+    logError("Error attempting to pollQueue. queue, err: ", [queue, err]);
   }
 }
 
