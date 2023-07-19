@@ -8,11 +8,27 @@ const uuid = require("uuid");
 const cookieParser = require("cookie-parser");
 const fs = require("fs");
 
+// put media here initially until we verify the request
+const TEMP_BUFFER = "media-buffer";
+const IMG_DIR = "public/media";
+// multer file upload bucket
+// not confident about 'cb'. it seems like they're callback functions multer provides
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, TEMP_BUFFER);
+  },
+  filename: async (req, file, cb) => { // this function determines a name for each file
+    cb(null, await computeFilename(file.originalname, 0));
+  }
+})
+const upload = multer({ storage: storage });
+
 const tumblrHandler = require("./util/tumblr-handler.js");
 // canned sql
 const q = require("./util/queries.js");
 // we have a class defined to make handling content objects a little easier
 const Content = require("./util/content.js");
+
 // timer - if this is non-null, we're going to try to post when the time comes around again
 let postTimer = null;
 
@@ -21,22 +37,27 @@ const POST_TO = ["tumblr"];
 const DEFAULT_LIMIT = 20;
 const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
+const QUEUE = "queue.json";
 // if true, don't actually post anywhere
 const DEBUG = true;
 
-// todo: enums?
+// enums for possible user errors:
 const ERR_AUTH = -1;
+// catchall 400. in add-post, this is 'you didn't attach a body'
 const ERR_PARAM = -2;
+// add-post error: if a post has no mapinfo, it must contain comments.
+const ERR_MINIMAL_CONTENT = -3;
+// add-post error: if one piece of mapInfo exists, all 3 of the fields + media must exist.
+const ERR_INCOMPLETE_MAPINFO = -4;
 
 const COOKIE_EXPIRY = 1000 * 60 * 60 * 8; // 8 hours, in ms
 const DEFAULT_PORT = 7999;
+
 const app = express();
-// [lecture code copypasta] for application/x-www-form-urlencoded
+// for application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true })); // built-in middleware
 // for application/json
 app.use(express.json()); // built-in middleware
-// for multipart/form-data (required with FormData)
-app.use(multer().none()); // requires the "multer" module
 app.use(cookieParser());
 
 // note - does not currently support searching, because that's going to be complicated
@@ -86,7 +107,7 @@ app.get("/posts", async (req, res) => {
   }
 });
 
-app.post("/auth", async (req, res) => {
+app.post("/auth", upload.none(), async (req, res) => {
   let db;
   if (req.body.user && req.body.pass) {
     try {
@@ -114,7 +135,7 @@ app.post("/auth", async (req, res) => {
   }
 });
 
-app.post("/status", async (req, res) => {
+app.post("/status", upload.none(), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
@@ -140,11 +161,12 @@ app.post("/status", async (req, res) => {
   }
 })
 
-app.post("/schedule", async (req, res) => {
+app.post("/schedule", authCheck, upload.none(), async (req, res) => {
   let db;
   try {
     db = await getDBConnection();
-    const isValid = await scheduleParamsValid(db, req.body.time, req.cookies);
+    console.log(req.cookies);
+    const isValid = await scheduleParamsValid(db, req.body.time);
     await close(db);
 
     if (isValid === ERR_AUTH) { // bad/missing cookie
@@ -166,6 +188,275 @@ app.post("/schedule", async (req, res) => {
   }
 });
 
+app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
+  let db;
+  try {
+    db = await getDBConnection();
+    const isValid = await addParamsValid(db, req.body, req.files);
+    await close(db);
+
+    if (isValid === ERR_PARAM) { // no body
+      res.type("text").status(400)
+        .send("Missing body for /add-post.");
+    } else if (isValid === ERR_INCOMPLETE_MAPINFO) {
+      res.type("text").status(400)
+        .send("Missing some parts of required map information. If title/author/url are present, " +
+          "all three of them must be, as well as media.");
+    } else if (isValid === ERR_MINIMAL_CONTENT) {
+      res.type("text").status(400)
+        .send("Missing minimally required content for a post. A post must either include some " +
+          "comments or have info about a map + some media for it.");
+    } else { // good to go
+      // move images from temp folder to media
+      await moveFiles(req.files);
+      const responseObject = buildPostFromRequest(req.body, req.files);
+      await enqueue(responseObject);
+      console.log("sent response: ");
+      console.log(responseObject);
+      res.json(responseObject);
+    }
+    await cleanUpTemp();
+  } catch (err) { // some kind of error- could be DB, could be file system related
+    console.error(err);
+    await logError("Error occurred in /add-post. Body params, err: ",
+      [req.body, req.files, req.cookies, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+});
+
+async function archivePost(post) {
+  // we have many inserts to do; let's take it one piece at a time
+  // if any of this fails, we ideally want to rollback
+  let db;
+  try {
+    db = await getDBConnection();
+    await db.exec("BEGIN"); // begin tx
+
+    // Content table:
+    const result = await db.run(q.INSERT_CONTENT,
+      [post.mapInfo.title, post.mapInfo.author, post.mapInfo.url, post.flashing]);
+    const lastId = result.lastID;
+
+    // Tags and ContentTags tables:
+    if (post.tags && post.tags.length > 0) {
+      await archiveTags(db, post.tags, lastId);
+    }
+
+    // Comments table:
+    if (post.comments && post.comments.length > 0) {
+      await archiveComments(db, post.comments, lastId);
+    }
+
+    // Media table:
+    if (post.media && post.media.length > 0) {
+      await archiveMedia(db, post.media, lastId);
+    }
+
+    await db.exec("COMMIT"); // end tx
+
+  } catch (err) {
+    console.error(err);
+    logError("Error while trying to archive the post in the DB. post, err: ", [post, err]);
+    await db.exec("ROLLBACK"); // abort tx
+    await close(db);
+  }
+
+
+  // changing an array to a delimited string for sql is bad practice but it simplifies our text
+  // comment handling here somewhat. this could theoretically be another table but i'm already not
+  // super confident in the data schema
+
+}
+
+async function archiveMedia(db, media, contentId) {
+  for (const item of media) {
+    await db.run(q.INSERT_MEDIA, [contentId, item]);
+  }
+}
+
+async function archiveComments(db, comments, contentId) {
+  let order = 0; // for recovering what order the comments come in on the other end
+  for (const comm of comments) {
+    await db.run(q.INSERT_COMMENTS, [contentId, order, comm]);
+    order++;
+  }
+}
+
+async function archiveTags(db, tags, contentId) {
+  // both of these loops can probably be used to create queries that insert multiple rows. unsure
+  // if that's actually more efficient than just running multiple statements.
+  const tagIds = [];
+  // insert all tags if they don't exist
+  for (const tag of tags) {
+    await db.run(q.INSERT_TAG, [tag]);
+    // fetch the id for this tag
+    const thisTagId = (await db.get(q.QUERY_ID_FROM_TAG, [tag])).tag_id;
+    tagIds.push(thisTagId);
+  }
+
+  // now create content-tag relation
+  for (const tagId of tagIds) {
+    console.log("inserting cid/tid pair: ", contentId, tagId);
+    await db.run(q.INSERT_TAG_ON_CONTENT, [contentId, tagId]);
+  }
+}
+
+async function enqueue(post) {
+  // get queue
+  try {
+    const queue = JSON.parse(await fs.readFileSync(QUEUE));
+    // and append to it
+    queue.push(post);
+    console.log(queue);
+    // set queue
+    await fs.writeFileSync(QUEUE, JSON.stringify(queue, null, 2));
+  } catch (err) {
+    console.error(err);
+    logError("Error in enqueue. Post, err: ", [post, err]);
+  }
+}
+
+function buildPostFromRequest(body, files) {
+  const flashing = body.flashing && body.flashing === "on" ? true : false;
+
+  // pile in all the media
+  let media = [];
+  for (const file of files) {
+    // todo fiddle with IMG_DIR so this doesn't suck so bad lmao
+    media.push(__dirname + "/" + IMG_DIR + "/" + file.filename);
+  }
+
+  // tags will be comma-separated
+  let tags = body.tags ? body.tags.split(",") : [];
+
+  // comment processing is a little hairier. there's almost certainly a more elegant method here
+  const regex = new RegExp("\\n");
+  let comments = [];
+  if (body.comments) {
+    comments = body.comments
+      .split(regex)
+      .map(line => line.trim())
+      .filter(line => line !== ""); // remove stray "" elements left by double linebreaks
+  }
+
+  const response = new Content(
+    {
+      title: body.title || null,
+      author: body.author || null,
+      url: body["source-url"] || null
+    },
+    media,
+    flashing,
+    tags,
+    comments
+  );
+
+  return response;
+}
+
+async function computeFilename(oldName, suffix) {
+  // the nature of try-catch means we're doing this recursively in place of what would be a while
+  let filename;
+  // if we're looking for a suffixed file, append it
+  if (suffix != 0) {
+    filename = oldName.substring(0, oldName.indexOf(".")) + "(" + suffix + ")" +
+      oldName.substring(oldName.indexOf("."));
+  } else {
+    filename = oldName;
+  }
+  try {
+    // does it exist?
+    await fs.statSync(IMG_DIR + "/" + filename);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      // the current filename doesn't exist! so we can safely return it
+      return filename;
+    } else { // something else terrible happened
+      console.error(err);
+      logError("Error trying to check if file exists. Filename, err: ",
+        [oldName, err]);
+      return null;
+    }
+  }
+  // if we're here, that name is taken. increment the suffix and try again:
+  const newSuffix = parseInt(suffix) + 1;
+  return computeFilename(oldName, newSuffix);
+}
+
+/**
+ * If any files are hanging around in the media buffer, delete them.
+ */
+async function cleanUpTemp() {
+  try {
+    const dir = await fs.readdirSync(TEMP_BUFFER);
+    for (const file of dir) {
+      await fs.unlinkSync(TEMP_BUFFER + "/" + file);
+    }
+  } catch (err) {
+    console.error(err);
+    logError("Error while trying to clean up temp directory. Error: ", [err]);
+  }
+}
+
+async function moveFiles(files) {
+  for (const file of files) {
+    const oldPath = file.destination + "/" + file.filename;
+    const newPath = IMG_DIR + "/" + file.filename;
+    await fs.renameSync(oldPath, newPath);
+  }
+}
+
+/**
+ * Middleware function to sit before Multer and make sure the /add-post caller is authenticated.
+ *
+ * If we *don't* do this, Multer's upload
+ * handling will dump the files into the storage even if we later find out the caller wasn't
+ * authorized. This would be bad!
+ * @param {Request} req express HTTP request object
+ * @param {Response} res express HTTP response object
+ * @param {NextFunction} next express middleware iterator function thing
+ */
+async function authCheck(req, res, next) {
+  let db;
+  try {
+    db = await getDBConnection();
+    console.log(req.cookies);
+    if (!req.cookies || !(await isLoggedIn(db, req.cookies.cookie))) {
+      await close(db);
+      res.type("text").status(401).send("This request requires a valid authentication cookie.");
+    } else {
+      await close(db);
+      // pass along to next middleware
+      next();
+    }
+  } catch (err) {
+    console.error(err);
+    logError("Error while trying to run authentication middleware. Cookie, err: ",
+      [cookies, err]);
+  }
+}
+
+async function addParamsValid(db, meta, media) {
+  console.log(media);
+  if (!meta) { // body must exist
+    console.log("meta was null");
+    return ERR_PARAM;
+  } else if ( // if mapinfo exists, all 3 fields and media must exist
+    (meta.title && (!meta.author || !meta["source-url"] || media.length === 0)) ||
+    (meta.author && (!meta.title || !meta["source-url"] || media.length === 0)) ||
+    (meta["source-url"] && (!meta.title || !meta.author || media.length === 0))) {
+    console.log(meta.title, meta.author, meta["source-url"], media);
+    return ERR_INCOMPLETE_MAPINFO;
+  } else if (!meta.title && !meta.comments) { // if mapinfo doesn't exist, comments must exist
+    console.log(meta.title, meta.comments);
+    return ERR_MINIMAL_CONTENT;
+  }
+
+  // not doing any detailed media verification rn
+  return 0;
+}
+
 async function handleTimeChange(time) {
   // change the time in the config
   const cfg = await getConfig();
@@ -181,10 +472,8 @@ async function handleTimeChange(time) {
 
 }
 
-async function scheduleParamsValid(db, time, cookies) {
-  if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
-    return ERR_AUTH;
-  } else if (!time || !parseTime(time).hour) {
+async function scheduleParamsValid(db, time) {
+  if (!time || !parseTime(time).hour) {
     return ERR_PARAM;
   }
 
@@ -252,7 +541,8 @@ function schedulePost(postTime) {
   const scheduledTime = new Date(Date.now());
 
   // is the next instance of postTime tomorrow?
-  if (currentTime.getHours() >= hour && currentTime.getMinutes() > mins) {
+  if (currentTime.getHours() > hour ||
+    (currentTime.getHours() == hour && currentTime.getMinutes() >= mins)) {
     // move it forward a day
     scheduledTime.setDate(scheduledTime.getDate() + 1);
   }
@@ -263,6 +553,7 @@ function schedulePost(postTime) {
 
   // then just subtract one from the other
   const ms = scheduledTime - currentTime;
+  console.log(ms);
   postTimer = setTimeout(makePost, ms);
 }
 
@@ -416,39 +707,63 @@ async function getLastPostId(db) {
 }
 
 async function makePost() {
-  const debugPost = new Content(
-    {
-      author: "dickman",
-      title: "gm_butts.bsp",
-      url: "www.google.com"
-    },
-    [
-      __dirname + '/public/img-holding/skywatcher.mp4'
-    ],
-    true,
-    ['these are', 'some tags'],
-    ["video upload attempt again, because there's a phantom 'undefined' up top. wtf?"]);
 
+  const post = await pollQueue();
   if (DEBUG) {
     console.log("debug: we called makePost! at ");
     console.log(new Date(Date.now()));
   } else {
-    for (const platform of POST_TO) {
-      if (platform === "tumblr") {
-        tumblrHandler.postToTumblr(post);
-      }
-      if (platform === "cohost") {
-        // insert a cohost handler here
+    console.log("OKAY THIS IS HAPPENING");
+    if (post) {
+      for (const platform of POST_TO) {
+        if (platform === "tumblr") {
+          await tumblrHandler.postToTumblr(post);
+        }
+        if (platform === "cohost") {
+          // insert a cohost handler here
+        }
       }
     }
+  }
 
-    // put this post in the archive db
+  console.log(post);
 
-    // move the media
+  // put this post in the archive db
+  await archivePost(post);
 
-    // schedule the next post
-    const cfg = await getConfig();
-    schedulePost(cfg.post_time);
+  // schedule the next post
+  const cfg = await getConfig();
+  // but wait a bit to cool off so the scheduler doesn't get too excited and just keep posting
+  // (todo: please fix this)
+  // setTimeout(() => {
+  //   schedulePost(cfg.post_time);
+  // }, 1000 * 120);
+  schedulePost(cfg.post_time);
+
+}
+
+async function pollQueue() {
+  console.log("top of pollQueue");
+  // get queue
+  try {
+    const queue = JSON.parse(await fs.readFileSync(QUEUE));
+    // if it's empty, don't do anything
+    if (queue.length === 0) {
+      return null;
+    }
+
+    // poll
+    const polled = queue[0];
+    const post = new Content(polled.mapInfo, polled.media, polled.flashing, polled.tags,
+      polled.comments);
+    queue.splice(0, 1);
+    await fs.writeFileSync(QUEUE, JSON.stringify(queue, null, 2));
+
+    return post;
+
+  } catch (err) {
+    console.error(err);
+    logError("Error attempting to pollQueue. queue, err: ", [queue, err]);
   }
 }
 
@@ -456,7 +771,8 @@ async function logError(text, args) {
   let out = timestamp();
   out += text + "\r\n";
   for (const arg of args) {
-    out += arg;
+    // to hopefully print something more useful than 'Object object'
+    out += JSON.stringify(arg);
     out += "\r\n";
   }
 

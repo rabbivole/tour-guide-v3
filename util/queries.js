@@ -16,5 +16,16 @@ module.exports = {
   QUERY_GET_USER: "SELECT * FROM Users WHERE username = ?",
   INSERT_COOKIE: "UPDATE Users SET auth_cookie = ? WHERE username = ?",
   // note this will cease to be a good plan if we ever have more than one user account
-  QUERY_IS_AUTHED: "SELECT COUNT(username) AS cnt FROM Users WHERE auth_cookie = ?"
+  QUERY_IS_AUTHED: "SELECT COUNT(username) AS cnt FROM Users WHERE auth_cookie = ?",
+
+  INSERT_CONTENT: "INSERT INTO Content (title, author, source_url, flashing, date_posted) VALUES " +
+    "(?, ?, ?, ?, DATETIME('now'))",
+  INSERT_TAG: "INSERT OR IGNORE INTO Tags (tag_text) VALUES (?)",
+  QUERY_ID_FROM_TAG: "SELECT tag_id FROM Tags WHERE tag_text = ?",
+  INSERT_TAG_ON_CONTENT: "INSERT INTO ContentTags (content_id, tag_id) VALUES " +
+    "(?, ?)",
+  INSERT_COMMENTS: "INSERT INTO Comments (content_id, ordering, comment) VALUES " +
+    "(?, ?, ?)",
+  INSERT_MEDIA: "INSERT INTO Media (content_id, media_name) VALUES " +
+    "(?, ?)"
 }
