@@ -39,7 +39,7 @@ const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
 const QUEUE = "queue.json";
 // if true, don't actually post anywhere
-const DEBUG = false;
+const DEBUG = true;
 
 // enums for possible user errors:
 const ERR_AUTH = -1;
@@ -58,8 +58,6 @@ const app = express();
 app.use(express.urlencoded({ extended: true })); // built-in middleware
 // for application/json
 app.use(express.json()); // built-in middleware
-// for multipart/form-data
-//app.use(multer().none()); // requires the "multer" module
 app.use(cookieParser());
 
 // note - does not currently support searching, because that's going to be complicated
@@ -226,6 +224,83 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
       .send("A server error has occurred. Please try your request again later.");
   }
 });
+
+async function archivePost(post) {
+  // we have many inserts to do; let's take it one piece at a time
+  // if any of this fails, we ideally want to rollback
+  let db;
+  try {
+    db = await getDBConnection();
+    await db.exec("BEGIN"); // begin tx
+
+    // Content table:
+    const result = await db.run(q.INSERT_CONTENT,
+      [post.mapInfo.title, post.mapInfo.author, post.mapInfo.url, post.flashing]);
+    const lastId = result.lastID;
+
+    // Tags and ContentTags tables:
+    if (post.tags && post.tags.length > 0) {
+      await archiveTags(db, post.tags, lastId);
+    }
+
+    // Comments table:
+    if (post.comments && post.comments.length > 0) {
+      await archiveComments(db, post.comments, lastId);
+    }
+
+    // Media table:
+    if (post.media && post.media.length > 0) {
+      await archiveMedia(db, post.media, lastId);
+    }
+
+    await db.exec("COMMIT"); // end tx
+
+  } catch (err) {
+    console.error(err);
+    logError("Error while trying to archive the post in the DB. post, err: ", [post, err]);
+    await db.exec("ROLLBACK"); // abort tx
+    await close(db);
+  }
+
+
+  // changing an array to a delimited string for sql is bad practice but it simplifies our text
+  // comment handling here somewhat. this could theoretically be another table but i'm already not
+  // super confident in the data schema
+
+}
+
+async function archiveMedia(db, media, contentId) {
+  for (const item of media) {
+    await db.run(q.INSERT_MEDIA, [contentId, item]);
+  }
+}
+
+async function archiveComments(db, comments, contentId) {
+  let order = 0; // for recovering what order the comments come in on the other end
+  for (const comm of comments) {
+    await db.run(q.INSERT_COMMENTS, [contentId, order, comm]);
+    order++;
+  }
+}
+
+async function archiveTags(db, tags, contentId) {
+  // both of these loops can probably be used to create queries that insert multiple rows. unsure
+  // if that's actually more efficient than just running multiple statements.
+  const tagIds = [];
+  // insert all tags if they don't exist
+  for (const tag of tags) {
+    await db.run(q.INSERT_TAG, [tag]);
+    // fetch the id for this tag
+    const thisTagId = (await db.get(q.QUERY_ID_FROM_TAG, [tag])).tag_id;
+    tagIds.push(thisTagId);
+  }
+
+  // now create content-tag relation
+  for (const tagId of tagIds) {
+    console.log("inserting cid/tid pair: ", contentId, tagId);
+    await db.run(q.INSERT_TAG_ON_CONTENT, [contentId, tagId]);
+  }
+}
 
 async function enqueue(post) {
   // get queue
@@ -454,8 +529,6 @@ async function handleStatusChange(action) {
   return response;
 }
 
-// todo: scheduling likely needs to be entirely rewritten so that we only post one piece of content
-// per day
 function schedulePost(postTime) {
   /* okay, so... we need the # of ms between now and the next instance of our posting time. to get
   that, we do some kind of icky Date math. we ignore DST; this method should be used to
@@ -469,7 +542,7 @@ function schedulePost(postTime) {
 
   // is the next instance of postTime tomorrow?
   if (currentTime.getHours() > hour ||
-    (currentTime.getHours() == hour && currentTime.getMinutes() > mins)) {
+    (currentTime.getHours() == hour && currentTime.getMinutes() >= mins)) {
     // move it forward a day
     scheduledTime.setDate(scheduledTime.getDate() + 1);
   }
@@ -634,25 +707,13 @@ async function getLastPostId(db) {
 }
 
 async function makePost() {
-  const debugPost = new Content(
-    {
-      author: "dickman",
-      title: "gm_butts.bsp",
-      url: "www.google.com"
-    },
-    [
-      __dirname + '/public/img-holding/skywatcher.mp4'
-    ],
-    true,
-    ['these are', 'some tags'],
-    ["video upload attempt again, because there's a phantom 'undefined' up top. wtf?"]);
 
+  const post = await pollQueue();
   if (DEBUG) {
     console.log("debug: we called makePost! at ");
     console.log(new Date(Date.now()));
   } else {
     console.log("OKAY THIS IS HAPPENING");
-    const post = await pollQueue();
     if (post) {
       for (const platform of POST_TO) {
         if (platform === "tumblr") {
@@ -663,21 +724,26 @@ async function makePost() {
         }
       }
     }
-
-    // put this post in the archive db
-
-    // schedule the next post
-    const cfg = await getConfig();
-    // but wait a bit to cool off so the scheduler doesn't get too excited and just keep posting
-    // (todo: please fix this)
-    setTimeout(() => {
-      schedulePost(cfg.post_time);
-    }, 1000 * 120);
-
   }
+
+  console.log(post);
+
+  // put this post in the archive db
+  await archivePost(post);
+
+  // schedule the next post
+  const cfg = await getConfig();
+  // but wait a bit to cool off so the scheduler doesn't get too excited and just keep posting
+  // (todo: please fix this)
+  // setTimeout(() => {
+  //   schedulePost(cfg.post_time);
+  // }, 1000 * 120);
+  schedulePost(cfg.post_time);
+
 }
 
 async function pollQueue() {
+  console.log("top of pollQueue");
   // get queue
   try {
     const queue = JSON.parse(await fs.readFileSync(QUEUE));
