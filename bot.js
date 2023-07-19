@@ -225,6 +225,67 @@ app.post("/add-post", authCheck, upload.array('media'), async (req, res) => {
   }
 });
 
+// empty body post request - omit the upload.none()
+app.post("/shuffle", authCheck, async (req, res) => {
+  let queue;
+  try {
+    queue = await getQueue();
+    shuffle(queue);
+    await setQueue(queue);
+
+    res.type("text").send("Queue shuffed.");
+
+  } catch (err) { // some kind of filesystem error probably
+    console.error(err);
+    logError("Error trying to shuffle queue. queue, err:", [queue, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+});
+
+app.get("/queue-length", async (req, res) => {
+  let queue;
+  try {
+    queue = await getQueue();
+    res.type("text").send("The queue contains " + queue.length + " posts. " +
+      "(Note that these may be broken up into multiple posts to meet platform requirements.)");
+  } catch (err) {
+    // some kind of filesystem error probably
+    console.error(err);
+    logError("Error trying to get queue length. queue, err:", [queue, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+});
+
+app.get("/queue-time", async (req, res) => {
+  let cfg;
+  try {
+    cfg = await getConfig();
+    res.type("text").send("The next post is scheduled for " + cfg.post_time + " local device " +
+      "time.");
+  } catch (err) {
+    // some kind of filesystem error probably
+    console.error(err);
+    logError("Error trying to get post time. cfg, err:", [cfg, err]);
+    res.type("text").status(500)
+      .send("A server error has occurred. Please try your request again later.");
+  }
+})
+
+function shuffle(array) {
+  // a hacky implementation of the Fisher-Yates algorithm, because it sounded fun
+  // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
+
+  for (let i = array.length - 1; i >= 1; i--) {
+    // pick a random element to swap to the end of the unshuffled list
+    const j = randomInRange(0, i);
+    const temp = array[j];
+    array[j] = array[i];
+    array[i] = temp;
+  }
+}
+
 async function archivePost(post) {
   // we have many inserts to do; let's take it one piece at a time
   // if any of this fails, we ideally want to rollback
@@ -303,14 +364,11 @@ async function archiveTags(db, tags, contentId) {
 }
 
 async function enqueue(post) {
-  // get queue
   try {
-    const queue = JSON.parse(await fs.readFileSync(QUEUE));
+    const queue = await getQueue();
     // and append to it
     queue.push(post);
-    console.log(queue);
-    // set queue
-    await fs.writeFileSync(QUEUE, JSON.stringify(queue, null, 2));
+    await setQueue(queue);
   } catch (err) {
     console.error(err);
     logError("Error in enqueue. Post, err: ", [post, err]);
@@ -565,6 +623,14 @@ async function setConfig(newConfig) {
   await fs.writeFileSync(CONFIG, JSON.stringify(newConfig, null, 2));
 }
 
+async function getQueue() {
+  return JSON.parse(await fs.readFileSync(QUEUE));
+}
+
+async function setQueue(newQueue) {
+  await fs.writeFileSync(QUEUE, JSON.stringify(newQueue, null, 2));
+}
+
 async function statusParamsValid(db, action, cookies) {
   if (!cookies || !(await isLoggedIn(db, cookies.cookie))) {
     return ERR_AUTH;
@@ -708,6 +774,11 @@ async function getLastPostId(db) {
 
 async function makePost() {
 
+  const cfg = await getConfig();
+  if (!cfg.active) {
+    return;
+  }
+
   const post = await pollQueue();
   if (DEBUG) {
     console.log("debug: we called makePost! at ");
@@ -726,13 +797,10 @@ async function makePost() {
     }
   }
 
-  console.log(post);
-
   // put this post in the archive db
   await archivePost(post);
 
   // schedule the next post
-  const cfg = await getConfig();
   // but wait a bit to cool off so the scheduler doesn't get too excited and just keep posting
   // (todo: please fix this)
   // setTimeout(() => {
@@ -746,7 +814,7 @@ async function pollQueue() {
   console.log("top of pollQueue");
   // get queue
   try {
-    const queue = JSON.parse(await fs.readFileSync(QUEUE));
+    const queue = await getQueue();
     // if it's empty, don't do anything
     if (queue.length === 0) {
       return null;
@@ -757,7 +825,7 @@ async function pollQueue() {
     const post = new Content(polled.mapInfo, polled.media, polled.flashing, polled.tags,
       polled.comments);
     queue.splice(0, 1);
-    await fs.writeFileSync(QUEUE, JSON.stringify(queue, null, 2));
+    await setQueue(queue);
 
     return post;
 
@@ -777,6 +845,18 @@ async function logError(text, args) {
   }
 
   await fs.writeFileSync(LOGFILE, out, { flag: "a+" });
+}
+
+/**
+ * Helper function for generating a random value in an inclusive integer range.
+ * From MDN docs, because I'm tired and I have to remember how to adjust .random every single time:
+ * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/random
+ * @param {int} from min value
+ * @param {int} to max value
+ * @returns {int} a random integer [from, to]
+ */
+function randomInRange(from, to) {
+  return Math.floor(Math.random() * (to - from + 1) + from);
 }
 
 /**
@@ -821,8 +901,9 @@ async function getDBConnection() {
 
 async function onBoot() {
   const config = await getConfig();
-  schedulePost(config.post_time);
-
+  if (config.active) {
+    schedulePost(config.post_time);
+  }
 }
 
 onBoot();
