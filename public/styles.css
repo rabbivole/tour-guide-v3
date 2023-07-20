@@ -1,3 +1,56 @@
+:root { /* shared color defs */
+  /* first 2 eyedroppered from source dev textures */
+  --dev-orange: #e17d08;
+  --dev-gray: #5d5b5a;
+  --dev-gray-darker: #2F2E2D;
+  --dev-gray-lighter: #A5A3A1;
+  --roadtrip-gray: #323234;
+
+  /* garrysmod color */
+  --gmod-blue: #0082fe;
+
+  /* eyedroppered from bob animalcrossing */
+  --bob-lt-purple: #bf9bff;
+  --bob-dk-purple: #9333fe;
+  --bob-dress-pink: #fc4566;
+  --bob-flower-center: #feb302;
+}
+
+body {
+  background-color: var(--dev-gray-lighter);
+  display: flex;
+  gap: 0.5rem;
+  color: white;
+  font-family: 'Share', monospace;
+  font-size: 1.25rem;
+}
+
+ul {
+  font-size: 26px;
+  margin: .5rem 0;
+}
+
+p {
+  margin: .5rem 0;
+}
+
+nav {
+  flex-grow: 1.5;
+}
+
+body>article {
+  flex-grow: 8.5;
+}
+
+nav, body>article {
+  border-radius: 1rem;
+  height: 95vh;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  background-color: var(--dev-gray-darker);
+}
+
 form {
   display: flex;
   flex-direction: column;
@@ -5,7 +58,26 @@ form {
 }
 
 h1 {
-  text-align: center;
+  margin: 0;
+  font-size: 56px;
+  font-family: 'Flamenco', monospace;
+  color: var(--bob-dk-purple);
+}
+
+.status-good { /* 'stream' */
+  color: rgb(0, 255, 0);
+}
+
+.status-paused { /* 'hotel' */
+  color: var(--dev-gray-lighter);
+}
+
+.status-bad { /* 'release_alert' */
+  color: red;
+}
+
+.status-good span, .status-bad span {
+  animation: pulse 0.8s alternate infinite;
 }
 
 .alert-bad {
@@ -33,4 +105,39 @@ h1 {
 
 .card {
   width: 80%;
+}
+
+.button-divider, #under-status {
+  height: 2px;
+  width: 100%;
+  border: 0;
+  align-self: flex-start;
+}
+
+.button-divider {
+  background-image: linear-gradient(to right, var(--dev-orange), rgba(0, 0, 0, 0));
+}
+
+#post-time, #num-posts {
+  font-size: 1.4rem;
+  text-decoration: solid underline;
+}
+
+#status-widget {
+  vertical-align: middle;
+  font-size: 26px;
+}
+
+#under-status {
+  background-image: linear-gradient(to right, var(--bob-dk-purple), rgba(0, 0, 0, 0));
+}
+
+@keyframes pulse {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.75;
+  }
 }
