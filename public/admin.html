@@ -23,21 +23,85 @@
 
 <body>
   <nav>
-    <h1>
-      status
-    </h1>
-    <hr id="under-status">
-    <ul id="status-text" class="status-bad">
-      <li>
-        exploded? <span id="status-widget" class="material-symbols-outlined">release_alert</span>
-      </li>
-    </ul>
-    <p>next post at: <span id="post-time">13:00</span></p>
-    <p><span id="num-posts">69</span> posts in queue</p>
-    <hr class="button-divider">
+    <div id="status">
+      <h1>
+        status
+      </h1>
+      <hr class="status-hr">
+      <ul id="status-text" class="status-bad">
+        <li>
+          exploded? <span id="status-widget" class="material-symbols-outlined">release_alert</span>
+        </li>
+      </ul>
+      <p>next post at: <span id="post-time">13:00</span></p>
+      <p><span id="num-posts">69</span> posts in queue</p>
+      <hr class="status-hr">
+    </div>
+    <div id="buttons">
+      <hr class="button-divider">
+      <span id="btn-create">
+        <button>create post</button>
+      </span>
+      <hr class="button-divider">
+      <span id="btn-pause">
+        <button>pause/unpause</button>
+      </span>
+      <hr class="button-divider">
+      <span id="btn-time">
+        <button>set post time</button>
+      </span>
+      <hr class="button-divider">
+    </div>
+
   </nav>
   <article>
-    <p>the currently selected content pane goes here</p>
+    <section id="create-pane">
+      <h2>create post</h2>
+      <form>
+        <div id="mapinfo">
+          <h3>map info</h3>
+          <span class="labeled-field">
+            <label for="name">name: </label>
+            <input type="text" id="name">
+          </span>
+          <span class="labeled-field">
+            <label for="author">author: </label>
+            <input type="text" id="author">
+          </span>
+          <span class="labeled-field">
+            <label for="source">link: </label>
+            <input type="text" id="source">
+          </span>
+        </div>
+
+
+        <div id="form-middle">
+          <span class="labeled-field">
+            <label for="flash">flashing?: </label>
+            <input type="checkbox" id="flash">
+          </span>
+          <span class="labeled-field">
+            <label for="tags">tags: </label>
+            <input type="text" id="tags">
+          </span>
+        </div>
+
+        <h3>media </h3>
+        <div id="media-zone">
+          <input type="file" id="media" multiple>
+          <p>eventually, you'll drag some stuff in this box. but not yet!</p>
+        </div>
+
+
+        <h3>comments</h3>
+        <textarea id="comments" rows="8" cols="70"></textarea>
+
+        <input type="submit" value="submit!">
+      </form>
+      <div id="message-zone">
+        <!-- displays any errors, confirmation, etc -->
+      </div>
+    </section>
   </article>
 </body>
 
