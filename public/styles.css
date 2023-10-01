@@ -46,6 +46,16 @@ input[type="checkbox"] {
   margin: 0;
 }
 
+input[type="submit"] {
+  background-color: var(--dev-gray-darker);
+  border: solid 2px var(--dev-orange);
+  border-radius: 3px;
+  padding: 0.5rem;
+  color: var(--dev-orange);
+  font-size: 1.25rem;
+  font-family: 'Share', monospace;
+}
+
 label {
   margin-right: 0.5rem;
 }
@@ -60,7 +70,8 @@ p {
 }
 
 nav {
-  flex-grow: 1;
+  /* don't love this, but i'm having issues with flex-grow and a padding animation */
+  width: 30%;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -108,12 +119,13 @@ form {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 1.2rem;
 }
 
 /* spaces out sections of the form */
-form>div {
+/* form>div {
   margin-bottom: 1.2rem;
-}
+} */
 
 h1 {
   margin: 0;
@@ -185,6 +197,14 @@ h1 {
   background-image: linear-gradient(to right, var(--bob-dk-purple), rgba(0, 0, 0, 0));
 }
 
+.hovered {
+  background-image: linear-gradient(to right, var(--dev-orange), rgba(0, 0, 0, 0));
+}
+
+.drag-highlight {
+  border-color: var(--dev-orange) !important; /* override existing border color in dropzone */
+}
+
 #post-time, #num-posts {
   font-size: 1.4rem;
   text-decoration: solid underline;
@@ -213,15 +233,22 @@ h1 {
 
 #media-zone {
   height: 160px;
-  width: 80%;
+  width: 800px;
   background-color: var(--dev-gray);
-  border: double 4px black;
+  border: dashed 4px black;
   border-radius: 0.5rem;
   padding: 0.8rem;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  overflow: scroll;
+}
+
+#media-zone img {
+  width: 190px;
+  margin-bottom: 10px;
+  margin-right: 10px;
+  vertical-align: middle;
 }
 
 @keyframes pulse {

@@ -11,8 +11,8 @@ const TUMBLR_NAME = "x86-roadtrip"; // the blog to post to
 // tumblr seems to want to limit images in a photo post to 10. there are ways around this, but we'll
 // stick with it.
 const TUMBLR_MAX_IMG = 10;
-// for marking things epilepsy-sensitive
-const FLASH_TAG = "cw flashing";
+// for marking things epilepsy-sensitive - advised to remove the 'cw'
+const FLASH_TAG = "flashing";
 
 // we'll be using tumblrjs' functionality for adding a new method, because legacy multi-image posts
 // are broken and it doesn't support NPF
