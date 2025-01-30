@@ -39,7 +39,7 @@ const LOGFILE = "tourguide.log";
 const CONFIG = "config.json";
 const QUEUE = "queue.json";
 // if true, don't actually post anywhere
-const DEBUG = true;
+const DEBUG = false;
 
 // enums for possible user errors:
 const ERR_AUTH = -1;
